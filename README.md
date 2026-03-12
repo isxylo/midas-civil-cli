@@ -387,3 +387,125 @@ cli-anything-midas-civil (Click CLI)
         ├── MovingLoadOps     — 移动荷载
         └── ResultOps         — 分析结果提取
 ```
+
+---
+
+## 与 AI Agent 集成
+
+本 CLI 设计为 Agent 友好，所有命令支持 `--json` 输出，便于程序化解析。
+
+### Claude Code (claude-code)
+
+Claude Code 可直接通过 Bash 工具调用 CLI：
+
+```bash
+# 在 Claude Code 会话中直接使用
+cli-anything-midas-civil --json --key $KEY --url $URL node list
+cli-anything-midas-civil --json --key $KEY --url $URL model status
+```
+
+或在 CLAUDE.md 中预设凭据，让 Claude 直接操作模型：
+
+```markdown
+# CLAUDE.md
+MIDAS Civil NX CLI 已安装，凭据通过环境变量配置：
+- MIDAS_MAPI_KEY: 已设置
+- MIDAS_BASE_URL: 已设置
+使用 cli-anything-midas-civil 操作结构模型。
+```
+
+### Claude API (Python)
+
+通过 Anthropic Python SDK 配合 tool_use 调用：
+
+```python
+import subprocess
+import json
+import anthropic
+
+client = anthropic.Anthropic()
+
+def run_midas(command: str) -> str:
+    """执行 CLI 命令并返回 JSON 结果"""
+    result = subprocess.run(
+        f"cli-anything-midas-civil --json {command}",
+        shell=True, capture_output=True, text=True
+    )
+    return result.stdout or result.stderr
+
+tools = [{
+    "name": "midas_civil",
+    "description": "Execute a MIDAS Civil NX CLI command to create or query structural model data.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "CLI command without the binary name, e.g. 'node add --x 0 --y 0 --z 0'"
+            }
+        },
+        "required": ["command"]
+    }
+}]
+
+response = client.messages.create(
+    model="claude-opus-4-6",
+    max_tokens=4096,
+    tools=tools,
+    messages=[{"role": "user", "content": "创建一个简单的两节点梁模型"}]
+)
+
+# 处理 tool_use
+for block in response.content:
+    if block.type == "tool_use" and block.name == "midas_civil":
+        result = run_midas(block.input["command"])
+        print(result)
+```
+
+### OpenAI / 兼容接口
+
+```python
+from openai import OpenAI
+import subprocess
+
+client = OpenAI()
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "midas_civil",
+        "description": "Execute MIDAS Civil NX CLI command",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string",
+                            "description": "CLI subcommand, e.g. 'node list'"}
+            },
+            "required": ["command"]
+        }
+    }
+}]
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    tools=tools,
+    messages=[{"role": "user", "content": "列出所有节点"}]
+)
+```
+
+### 环境变量配置（推荐 Agent 使用）
+
+```bash
+export MIDAS_MAPI_KEY="your-key"
+export MIDAS_BASE_URL="https://moa-engineers.midasit.cn:443/civil"
+# 之后所有命令无需 --key 和 --url 参数
+cli-anything-midas-civil --json node list
+```
+
+---
+
+## 许可证
+
+Apache License 2.0
+
+本项目基于 [midas-civil-python](https://github.com/MIDASIT-Co-Ltd/midas-civil-python)（MIT License）开发。
