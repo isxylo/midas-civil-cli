@@ -392,41 +392,56 @@ cli-anything-midas-civil (Click CLI)
 
 ## 与 AI Agent 集成
 
-本 CLI 设计为 Agent 友好，所有命令支持 `--json` 输出，便于程序化解析。
+本 CLI 由 [CLI-Anything](https://github.com/HKUDS/CLI-Anything) 框架生成，所有命令支持 `--json` 输出，适合各类 AI Agent 直接调用。
 
-### Claude Code (claude-code)
-
-Claude Code 可直接通过 Bash 工具调用 CLI：
+### 环境变量配置（推荐）
 
 ```bash
-# 在 Claude Code 会话中直接使用
-cli-anything-midas-civil --json --key $KEY --url $URL node list
-cli-anything-midas-civil --json --key $KEY --url $URL model status
+export MIDAS_MAPI_KEY="your-key"
+export MIDAS_BASE_URL="https://moa-engineers.midasit.cn:443/civil"
+# 之后所有命令无需 --key 和 --url 参数
+cli-anything-midas-civil --json node list
 ```
 
-或在 CLAUDE.md 中预设凭据，让 Claude 直接操作模型：
+---
 
+### Claude Code
+
+Claude Code 可通过 CLI-Anything 插件生成本 CLI，也可直接在会话中调用：
+
+**安装 CLI-Anything 插件：**
+```bash
+/plugin marketplace add HKUDS/CLI-Anything
+/plugin install cli-anything
+```
+
+**在 Claude Code 中直接调用：**
+```bash
+# Claude Code 通过 Bash 工具直接执行
+cli-anything-midas-civil --json node list
+cli-anything-midas-civil --json model status
+cli-anything-midas-civil --json node add --x 0 --y 0 --z 0
+```
+
+**在 CLAUDE.md 中预设凭据：**
 ```markdown
 # CLAUDE.md
-MIDAS Civil NX CLI 已安装，凭据通过环境变量配置：
-- MIDAS_MAPI_KEY: 已设置
-- MIDAS_BASE_URL: 已设置
-使用 cli-anything-midas-civil 操作结构模型。
+MIDAS Civil NX CLI 已安装（cli-anything-midas-civil）。
+凭据已通过环境变量配置（MIDAS_MAPI_KEY、MIDAS_BASE_URL）。
+直接使用 cli-anything-midas-civil 操作结构模型，使用 --json 获取结构化输出。
 ```
 
-### Claude API (Python)
+---
 
-通过 Anthropic Python SDK 配合 tool_use 调用：
+### Claude API (Python SDK)
 
 ```python
 import subprocess
-import json
 import anthropic
 
-client = anthropic.Anthropic()
+client = anthropic.Anthropic()  # 读取 ANTHROPIC_API_KEY 环境变量
 
 def run_midas(command: str) -> str:
-    """执行 CLI 命令并返回 JSON 结果"""
     result = subprocess.run(
         f"cli-anything-midas-civil --json {command}",
         shell=True, capture_output=True, text=True
@@ -441,65 +456,84 @@ tools = [{
         "properties": {
             "command": {
                 "type": "string",
-                "description": "CLI command without the binary name, e.g. 'node add --x 0 --y 0 --z 0'"
+                "description": "CLI subcommand and options, e.g. 'node add --x 0 --y 0 --z 0' or 'node list'"
             }
         },
         "required": ["command"]
     }
 }]
 
-response = client.messages.create(
-    model="claude-opus-4-6",
-    max_tokens=4096,
-    tools=tools,
-    messages=[{"role": "user", "content": "创建一个简单的两节点梁模型"}]
-)
+messages = [{"role": "user", "content": "创建一个1000x1000mm的四节点板单元，板厚20mm"}]
 
-# 处理 tool_use
-for block in response.content:
-    if block.type == "tool_use" and block.name == "midas_civil":
-        result = run_midas(block.input["command"])
-        print(result)
+while True:
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=4096,
+        tools=tools,
+        messages=messages
+    )
+    if response.stop_reason == "end_turn":
+        print(response.content[0].text)
+        break
+    # 处理 tool_use
+    tool_results = []
+    for block in response.content:
+        if block.type == "tool_use":
+            result = run_midas(block.input["command"])
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result
+            })
+    messages.append({"role": "assistant", "content": response.content})
+    messages.append({"role": "user", "content": tool_results})
 ```
+
+---
 
 ### OpenAI / 兼容接口
 
 ```python
-from openai import OpenAI
 import subprocess
+from openai import OpenAI
+import json
 
-client = OpenAI()
+client = OpenAI()  # 读取 OPENAI_API_KEY 环境变量
+
+def run_midas(command: str) -> str:
+    result = subprocess.run(
+        f"cli-anything-midas-civil --json {command}",
+        shell=True, capture_output=True, text=True
+    )
+    return result.stdout or result.stderr
 
 tools = [{
     "type": "function",
     "function": {
         "name": "midas_civil",
-        "description": "Execute MIDAS Civil NX CLI command",
+        "description": "Execute MIDAS Civil NX CLI command to operate on structural models.",
         "parameters": {
             "type": "object",
             "properties": {
-                "command": {"type": "string",
-                            "description": "CLI subcommand, e.g. 'node list'"}
+                "command": {
+                    "type": "string",
+                    "description": "CLI subcommand and options, e.g. 'node list' or 'element beam --i-node 1 --j-node 2'"
+                }
             },
             "required": ["command"]
         }
     }
 }]
 
-response = client.chat.completions.create(
-    model="gpt-4o",
-    tools=tools,
-    messages=[{"role": "user", "content": "列出所有节点"}]
-)
-```
+messages = [{"role": "user", "content": "列出所有节点"}]
+response = client.chat.completions.create(model="gpt-4o", tools=tools, messages=messages)
 
-### 环境变量配置（推荐 Agent 使用）
-
-```bash
-export MIDAS_MAPI_KEY="your-key"
-export MIDAS_BASE_URL="https://moa-engineers.midasit.cn:443/civil"
-# 之后所有命令无需 --key 和 --url 参数
-cli-anything-midas-civil --json node list
+# 处理 tool_call
+for choice in response.choices:
+    if choice.message.tool_calls:
+        for tc in choice.message.tool_calls:
+            result = run_midas(json.loads(tc.function.arguments)["command"])
+            print(result)
 ```
 
 ---
