@@ -1,0 +1,2 @@
+[console_scripts]
+cli-anything-midas-civil = cli_anything.midas_civil.midas_civil_cli:main
